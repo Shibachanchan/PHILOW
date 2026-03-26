@@ -57,7 +57,7 @@ def predict_3ax(o_path, net, out_dir, size, device, mask_dir=None, out_channel=N
     xy_imgs = dask_image.imread.imread(os.path.join(o_path, '*.png'))
     xy_masks = dask_image.imread.imread(os.path.join(mask_dir, '*.png')) if mask_dir is not None else None
     if xy_masks is not None:
-        xy_imgs = dask.array.asarray([renormalize_8bit(xy_imgs[z] * (xy_masks[z] > 0)) for z in range(xy_imgs.shape[0])])
+        xy_imgs = dask.array.asarray([renormalize_8bit(xy_imgs[z]) * (xy_masks[z] > 0) for z in range(xy_imgs.shape[0])])
     else:
         xy_imgs = dask.array.asarray([renormalize_8bit(xy_imgs[z]) for z in range(xy_imgs.shape[0])])
     print(f"xy_imgs.shape: {xy_imgs.shape}")
@@ -107,11 +107,11 @@ def predict_1ax(ori_filenames, net, out_dir, size, device, mask_dir=None, out_ch
     for filename in ori_filenames:
         image = Image.open(str(filename))
         image_arr = np.array(image)
+        image_arr = renormalize_8bit(image_arr)
         if mask_dir is not None:
             mask = Image.open(f"{mask_dir}/{filename.name}")
             mask = np.array(mask)
             image_arr = np.where(mask == 0, 0, image_arr)
-        image = renormalize_8bit(image_arr)
         image = Image.fromarray(image)
         if mask_dir is not None:
             pred_imgs_ave = 255 * pred_large_image(image, net, device, size, is_3class=True)
