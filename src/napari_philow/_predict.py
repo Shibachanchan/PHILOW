@@ -3,6 +3,7 @@ import os
 
 import dask_image.imread
 import dask
+import dask.array as da
 import numpy as np
 from PIL import Image
 from skimage import io
@@ -10,7 +11,15 @@ from tifffile import natural_sorted
 from tqdm import tqdm
 
 from napari_philow.segmentation.predict import pred_large_image
-from napari_philow._utils import renormalize_8bit
+from napari_philow._utils import renormalize_8bit, renormalize_8bit_masked
+
+
+def _normalize_xy_masked_slice(image, mask, filename, slice_index):
+    return renormalize_8bit_masked(
+        np.asarray(image),
+        np.asarray(mask),
+        context=f"cristae predict '{filename}' (xy slice {slice_index})",
+    )
 
 
 def predict_and_save(dask_arr, net, out_dir_axis, size, device, masks=None, out_channel=None):
@@ -57,9 +66,19 @@ def predict_3ax(o_path, net, out_dir, size, device, mask_dir=None, out_channel=N
     xy_imgs = dask_image.imread.imread(os.path.join(o_path, '*.png'))
     xy_masks = dask_image.imread.imread(os.path.join(mask_dir, '*.png')) if mask_dir is not None else None
     if xy_masks is not None:
-        xy_imgs = dask.array.asarray([renormalize_8bit(xy_imgs[z]) * (xy_masks[z] > 0) for z in range(xy_imgs.shape[0])])
+        slice_shape = tuple(int(dim) for dim in xy_imgs.shape[1:])
+        normalized_slices = []
+        for z, filename in enumerate(filenames):
+            delayed_slice = dask.delayed(_normalize_xy_masked_slice)(
+                xy_imgs[z],
+                xy_masks[z],
+                os.path.basename(filename),
+                z,
+            )
+            normalized_slices.append(da.from_delayed(delayed_slice, shape=slice_shape, dtype=np.uint8))
+        xy_imgs = da.stack(normalized_slices, axis=0)
     else:
-        xy_imgs = dask.array.asarray([renormalize_8bit(xy_imgs[z]) for z in range(xy_imgs.shape[0])])
+        xy_imgs = da.stack([renormalize_8bit(xy_imgs[z]) for z in range(xy_imgs.shape[0])], axis=0)
     print(f"xy_imgs.shape: {xy_imgs.shape}")
     yz_imgs = xy_imgs.transpose(2, 0, 1)
     yz_masks = xy_masks.transpose(2, 0, 1) if xy_masks is not None else None
@@ -107,12 +126,17 @@ def predict_1ax(ori_filenames, net, out_dir, size, device, mask_dir=None, out_ch
     for filename in ori_filenames:
         image = Image.open(str(filename))
         image_arr = np.array(image)
-        image_arr = renormalize_8bit(image_arr)
         if mask_dir is not None:
             mask = Image.open(f"{mask_dir}/{filename.name}")
             mask = np.array(mask)
-            image_arr = np.where(mask == 0, 0, image_arr)
-        image = Image.fromarray(image)
+            image_arr = renormalize_8bit_masked(
+                image_arr,
+                mask,
+                context=f"cristae predict '{filename.name}'",
+            )
+        else:
+            image_arr = renormalize_8bit(image_arr)
+        image = Image.fromarray(image_arr)
         if mask_dir is not None:
             pred_imgs_ave = 255 * pred_large_image(image, net, device, size, is_3class=True)
             mask = np.concatenate([mask[..., np.newaxis], mask[..., np.newaxis], mask[..., np.newaxis]], axis=-1)
