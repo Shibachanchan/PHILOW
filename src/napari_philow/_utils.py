@@ -22,6 +22,33 @@ def renormalize_8bit(image):
     return image.astype(np.uint8)
 
 
+def renormalize_8bit_masked(image, mask, *, context="image"):
+    image_arr = np.asarray(image)
+    valid_mask = np.asarray(mask) > 0
+
+    if not np.any(valid_mask):
+        raise ValueError(f"{context}: mask has no positive pixels for masked normalization")
+
+    valid_pixels = image_arr[valid_mask]
+    origin_min = valid_pixels.min()
+    origin_max = valid_pixels.max()
+
+    if np.isclose(origin_min, origin_max):
+        raise ValueError(
+            f"{context}: masked normalization requires varying intensities, "
+            f"but masked pixels are constant at {origin_min}"
+        )
+
+    image_float = image_arr.astype(np.float32, copy=False)
+    normalized = np.zeros(image_arr.shape, dtype=np.float32)
+    normalized[valid_mask] = (
+        (image_float[valid_mask] - float(origin_min))
+        / float(origin_max - origin_min)
+        * 255.0
+    )
+    return normalized.astype(np.uint8)
+
+
 def check_csv(project_path, ext):
     if not os.path.isfile(os.path.join(project_path, os.path.basename(project_path) + '.csv')):
         cols = ['project', 'type', 'ext', 'z', 'y', 'x', 'z_size', 'y_size', 'x_size', 'created_date', 'update_date',
@@ -185,9 +212,21 @@ def show_so_layer(args):
 
 
 def preprocess_cristae(ori_path, mito_path, cristae_path, names, crop_size=1000):
-    ori_imgs = [renormalize_8bit(io.imread(os.path.join(ori_path, name), as_gray=True)) for name in names]
-    mito_imgs = [io.imread(os.path.join(mito_path, name), as_gray=True) for name in names]
-    cristae_imgs = [io.imread(os.path.join(cristae_path, name), as_gray=True) for name in names]
+    ori_imgs = []
+    mito_imgs = []
+    cristae_imgs = []
+    for name in names:
+        mito_img = io.imread(os.path.join(mito_path, name), as_gray=True)
+        ori_img = io.imread(os.path.join(ori_path, name), as_gray=True)
+        ori_imgs.append(
+            renormalize_8bit_masked(
+                ori_img,
+                mito_img,
+                context=f"cristae train '{name}'",
+            )
+        )
+        mito_imgs.append(mito_img)
+        cristae_imgs.append(io.imread(os.path.join(cristae_path, name), as_gray=True))
 
     # make gap
     preprocessed_imgs = []
@@ -210,7 +249,7 @@ def preprocess_cristae(ori_path, mito_path, cristae_path, names, crop_size=1000)
     W = ori_imgs[0].shape[1] // crop_size + 1
     for z in range(len(ori_imgs)):
         margin_ori_img = np.zeros((H * crop_size, W * crop_size), ori_imgs[0].dtype)
-        margin_ori_img[:ori_imgs[0].shape[0], :ori_imgs[0].shape[1]] = ori_imgs[z] * mito_imgs[z]
+        margin_ori_img[:ori_imgs[0].shape[0], :ori_imgs[0].shape[1]] = ori_imgs[z]
         margin_label_img = np.zeros((H * crop_size, W * crop_size, preprocessed_imgs.shape[3]), preprocessed_imgs.dtype)
         margin_label_img[:preprocessed_imgs.shape[1], :preprocessed_imgs.shape[2]] = preprocessed_imgs[z]
         for h in range(H):
